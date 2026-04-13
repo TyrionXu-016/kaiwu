@@ -1,0 +1,22 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Runtime logs and checkpoints
+train/log/
+train/backup_model/
+*.log
+
+# Archives and temp outputs
+*.zip
+tmp_log_*/
+
+# IDE/system files
+.DS_Store
+Thumbs.db
