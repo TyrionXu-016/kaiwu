@@ -88,6 +88,7 @@ class Preprocessor:
     CHARGE_BFS_MAX_EXPAND = 5000
     GUARD_RELAX_STUCK_STEPS = 8
     CHARGE_TERMINAL_DIST = 4.0
+    CHARGE_NEAR_DIST = 10.0
     CRITICAL_BATTERY_RATIO = 0.22
     LOW_BATTERY_STEP_PENALTY = -0.0025
     CRITICAL_BATTERY_STEP_PENALTY = -0.005
@@ -678,6 +679,43 @@ class Preprocessor:
                 self.charge_guard_triggered = 1
                 self.charge_guard_trigger_count += 1
                 return int(term_best_action)
+
+        # Near-charger stronger takeover:
+        # when entering near range, prefer shortest-path / direct approach actions
+        # and suppress detours caused by local scoring noise.
+        # 中近距强接管：进入近桩范围后优先选择最短路径动作，减少绕行抖动。
+        if base_dist <= self.CHARGE_NEAR_DIST:
+            near_danger_radius = max(0, relax_radius - 1)
+            near_best_action = None
+            near_best_score = float("inf")
+            for a, (dx, dz) in enumerate(dirs):
+                if a >= len(legal_action) or int(legal_action[a]) != 1:
+                    continue
+                if not valid_move(hx, hz, dx, dz, danger_radius=near_danger_radius):
+                    continue
+                nx, nz = hx + dx, hz + dz
+                if (nx, nz) in charger_set:
+                    self.charge_guard_triggered = 1
+                    self.charge_guard_trigger_count += 1
+                    return int(a)
+                bfs_steps = self._bfs_steps_to_charger(
+                    (nx, nz),
+                    charger_set,
+                    lambda x, z, ddx, ddz: valid_move(x, z, ddx, ddz, danger_radius=near_danger_radius),
+                )
+                if bfs_steps is None:
+                    continue
+                d_term = float(np.min(np.sqrt((charger_pts[:, 0] - nx) ** 2 + (charger_pts[:, 1] - nz) ** 2)))
+                reverse_penalty = 0.20 if opposite.get(last_action, -1) == a else 0.0
+                near_score = float(bfs_steps) + 0.20 * d_term + reverse_penalty
+                if near_score < near_best_score:
+                    near_best_score = near_score
+                    near_best_action = a
+            if near_best_action is not None:
+                self.guard_terminal_override_count += 1
+                self.charge_guard_triggered = 1
+                self.charge_guard_trigger_count += 1
+                return int(near_best_action)
 
         best_action = None
         best_score = float("inf")
