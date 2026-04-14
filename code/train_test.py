@@ -19,14 +19,14 @@ algorithm_name = "ppo"
 if __name__ == "__main__":
     # Align with code/conf/configure_app.toml for real PPO updates (not smoke-test defaults).
     # 与 configure_app.toml 一致，保证真实 PPO 批量与缓冲区规模。
-    # If OOM, try train_batch_size "3072"/"2048" and replay_buffer_capacity "10000".
+    # Keep batch moderate to reduce PPO update aggressiveness while debugging stability.
     run_train_test(
         algorithm_name=algorithm_name,
         algorithm_name_list=algorithm_name_list,
         env_vars={
             "replay_buffer_capacity": "16384",
             "preload_ratio": "1.0",
-            "train_batch_size": "4096",
+            "train_batch_size": "2048",
             "dump_model_freq": "100",
         },
     )

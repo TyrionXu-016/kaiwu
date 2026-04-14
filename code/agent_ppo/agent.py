@@ -95,6 +95,10 @@ class Agent(BaseAgent):
         prob = self._legal_soft_max(logits, legal_arr)
         action = self._legal_sample(prob, use_max=False)
         d_action = self._legal_sample(prob, use_max=True)
+        # Keep the behavior policy consistent with the executed action.
+        # If we override action by rules, record one-hot probs for PPO ratio correctness.
+        behavior_prob = prob.copy()
+        action_overridden = False
 
         # Low-battery hard guard: force heading to nearest charger when needed.
         # 低电量硬保护：必要时强制朝最近充电桩移动。
@@ -102,6 +106,7 @@ class Agent(BaseAgent):
         if guard_action is not None:
             action = guard_action
             d_action = guard_action
+            action_overridden = True
         else:
             # In normal mode, avoid one-step NPC danger cells when possible.
             # 非回充模式下优先过滤一步 NPC 危险落脚点，降低高电量早停风险。
@@ -119,6 +124,7 @@ class Agent(BaseAgent):
             if frontier_action is not None:
                 action = frontier_action
                 d_action = frontier_action
+                action_overridden = True
             else:
                 # Fallback to mild cardinal bias.
                 # 兜底使用轻量直行动作偏置。
@@ -128,11 +134,15 @@ class Agent(BaseAgent):
                 if cardinal_action is not None:
                     d_action = cardinal_action
 
+        if action_overridden:
+            behavior_prob = np.zeros_like(prob, dtype=np.float32)
+            behavior_prob[int(action)] = 1.0
+
         return [
             ActData(
                 action=[action],
                 d_action=[d_action],
-                prob=list(prob),
+                prob=list(behavior_prob),
                 value=value,
             )
         ]

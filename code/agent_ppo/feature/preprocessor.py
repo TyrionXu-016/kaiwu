@@ -55,8 +55,8 @@ class Preprocessor:
 
     CHARGE_GAIN_COEF = 0.006
 
-    APPROACH_CHARGER_REWARD = 0.008
-    LOW_BATTERY_RATIO = 0.42
+    APPROACH_CHARGER_REWARD = 0.02
+    LOW_BATTERY_RATIO = 0.6
     HARD_GUARD_BATTERY_RATIO = 0.30
     # Absolute guard threshold: when battery <= this value, force go charge.
     # 绝对电量阈值：当电量低于该值时，硬保护强制回充。
@@ -89,13 +89,17 @@ class Preprocessor:
     GUARD_RELAX_STUCK_STEPS = 8
     CHARGE_TERMINAL_DIST = 4.0
     CHARGE_NEAR_DIST = 10.0
-    CRITICAL_BATTERY_RATIO = 0.22
-    LOW_BATTERY_STEP_PENALTY = -0.0025
-    CRITICAL_BATTERY_STEP_PENALTY = -0.005
+    CRITICAL_BATTERY_RATIO = 0.28
+    LOW_BATTERY_STEP_PENALTY = -0.0045
+    CRITICAL_BATTERY_STEP_PENALTY = -0.009
+    # Keep a positive safety margin between current battery and nearest charger distance.
+    BATTERY_MARGIN_TARGET = 35.0
+    BATTERY_MARGIN_PENALTY_COEF = 0.0025
+    BATTERY_MARGIN_LOW_BATTERY_MULT = 2.0
 
     # Primary signal: matches official score direction (more cleaned tiles -> higher reward).
     # 主信号：与「清扫地面数量」一致，权重大于各类塑形。
-    CLEANING_TILE_WEIGHT = 0.18
+    CLEANING_TILE_WEIGHT = 0.14
 
     STEP_PENALTY_IDLE = -0.0012
     STEP_PENALTY_ACTIVE = -0.0004
@@ -1088,6 +1092,14 @@ class Preprocessor:
         elif br < self.LOW_BATTERY_RATIO:
             low_battery_penalty = self.LOW_BATTERY_STEP_PENALTY
 
+        # Penalize states where battery is not enough relative to nearest charger distance.
+        # This helps policy avoid entering near-hopeless low-energy trajectories.
+        battery_margin = float(self.battery) - float(self.nearest_charger_dist)
+        margin_gap = max(0.0, self.BATTERY_MARGIN_TARGET - battery_margin)
+        margin_penalty = self.BATTERY_MARGIN_PENALTY_COEF * margin_gap
+        if br < self.LOW_BATTERY_RATIO:
+            margin_penalty *= self.BATTERY_MARGIN_LOW_BATTERY_MULT
+
         env_r = self.ENV_REWARD_BLEND * self._frame_env_reward
         x, z = self.cur_pos
         revisit_penalty = 0.0
@@ -1102,6 +1114,7 @@ class Preprocessor:
             + charge_reward
             + approach_charger
             + low_battery_penalty
+            - margin_penalty
             + revisit_penalty
             + env_r
         )

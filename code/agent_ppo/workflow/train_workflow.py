@@ -11,6 +11,7 @@ Training workflow for Robot Vacuum.
 """
 
 import os
+import random
 import time
 
 import numpy as np
@@ -54,6 +55,9 @@ def workflow(envs, agents, logger=None, monitor=None, *args, **kwargs):
 
 
 class EpisodeRunner:
+    # Keep a fraction of guard-forced samples to avoid starving PPO updates.
+    GUARD_SAMPLE_KEEP_PROB = 0.35
+
     def __init__(self, env, agent, usr_conf, logger, monitor):
         self.env = env
         self.agent = agent
@@ -99,6 +103,8 @@ class EpisodeRunner:
             done = False
             step = 0
             total_reward = 0.0
+            skipped_guard_steps = 0
+            kept_guard_steps = 0
             last_env_obs = env_obs
 
             self.logger.info(f"Episode {self.episode_cnt} start")
@@ -167,6 +173,8 @@ class EpisodeRunner:
                         f"nearest_charger_dist:{nearest_charger_dist:.2f} "
                         f"battery_minus_charger_dist:{battery_minus_charger_dist:.2f} "
                         f"guard_count:{guard_count} "
+                        f"skipped_guard_steps:{skipped_guard_steps} "
+                        f"kept_guard_steps:{kept_guard_steps} "
                         f"guard_min_charger_dist:{guard_min_charger_dist:.2f} "
                         f"guard_terminal_override_count:{guard_terminal_override_count} "
                         f"terminated:{terminated} truncated:{truncated} "
@@ -190,12 +198,21 @@ class EpisodeRunner:
                     advantage=np.zeros(Config.VALUE_NUM, dtype=np.float32),
                     prob=np.array(act_data.prob, dtype=np.float32),
                 )
-                collector.append(frame)
+                # Skip safety-override transitions to reduce off-policy noise in PPO updates.
+                if int(getattr(self.agent.preprocessor, "charge_guard_triggered", 0)) == 1:
+                    if random.random() < self.GUARD_SAMPLE_KEEP_PROB:
+                        collector.append(frame)
+                        kept_guard_steps += 1
+                    else:
+                        skipped_guard_steps += 1
+                else:
+                    collector.append(frame)
 
                 if done:
                     # Add terminal reward to last frame
                     # 终局奖励叠加到最后一步
-                    collector[-1].reward = collector[-1].reward + np.array([final_reward], dtype=np.float32)
+                    if collector:
+                        collector[-1].reward = collector[-1].reward + np.array([final_reward], dtype=np.float32)
 
                     # Monitor reporting / 监控上报
                     now = time.time()
@@ -210,6 +227,8 @@ class EpisodeRunner:
                                     "nearest_charger_dist": nearest_charger_dist,
                                     "battery_minus_charger_dist": battery_minus_charger_dist,
                                     "charge_guard_count": guard_count,
+                                    "skipped_guard_steps": skipped_guard_steps,
+                                    "kept_guard_steps": kept_guard_steps,
                                     "guard_min_charger_dist": guard_min_charger_dist,
                                     "guard_terminal_override_count": guard_terminal_override_count,
                                 }

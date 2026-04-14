@@ -95,12 +95,16 @@ class Algorithm:
             results["value_loss"] = round(info["value_loss"], 4)
             results["policy_loss"] = round(info["policy_loss"], 4)
             results["entropy_loss"] = round(info["entropy_loss"], 4)
+            results["approx_kl"] = round(info["approx_kl"], 6)
+            results["clip_fraction"] = round(info["clip_fraction"], 4)
             results["reward"] = round(reward.mean().item(), 4)
 
             self.logger.info(
                 f"policy_loss: {results['policy_loss']}, "
                 f"value_loss: {results['value_loss']}, "
-                f"entropy_loss: {results['entropy_loss']}"
+                f"entropy_loss: {results['entropy_loss']}, "
+                f"approx_kl: {results['approx_kl']}, "
+                f"clip_fraction: {results['clip_fraction']}"
             )
             if self.monitor:
                 self.monitor.put_data({os.getpid(): results})
@@ -139,23 +143,28 @@ class Algorithm:
         old_action_prob = (one_hot * old_prob).sum(1, keepdim=True)
 
         ratio = new_prob / old_action_prob.clamp(1e-9)
+        ratio_clipped = ratio.clamp(1 - self.clip_param, 1 + self.clip_param)
 
         adv = advantage.squeeze(-1) if advantage.dim() > 1 else advantage
         adv = adv.unsqueeze(-1)
 
         policy_loss = torch.maximum(
             -ratio * adv,
-            -ratio.clamp(1 - self.clip_param, 1 + self.clip_param) * adv,
+            -ratio_clipped * adv,
         ).mean()
 
         # Total loss
         # 总损失
         total_loss = self.vf_coef * value_loss + policy_loss - self.var_beta * entropy_loss
+        approx_kl = (old_action_prob.clamp(1e-9).log() - new_prob.clamp(1e-9).log()).mean()
+        clip_fraction = ((ratio > (1 + self.clip_param)) | (ratio < (1 - self.clip_param))).float().mean()
 
         return total_loss, {
             "value_loss": value_loss.item(),
             "policy_loss": policy_loss.item(),
             "entropy_loss": entropy_loss.item(),
+            "approx_kl": approx_kl.item(),
+            "clip_fraction": clip_fraction.item(),
         }
 
     def _masked_softmax(self, logits, legal_action):

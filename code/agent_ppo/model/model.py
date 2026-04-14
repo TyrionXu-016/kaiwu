@@ -51,7 +51,7 @@ class Model(nn.Module):
         )
 
         self.actor_head = _make_fc(hidden2, act_num, gain=0.01)
-        self.critic_head = _make_fc(hidden2, 1, gain=0.01)
+        self.critic_head = _make_fc(hidden2, 1, gain=1.0)
 
     def forward(self, s, inference=False):
         """Forward pass.
