@@ -586,7 +586,9 @@ class Preprocessor:
 
         # Build local BFS target set: all visible/known charger cells.
         # 构建 BFS 目标集合：已知充电桩格子。
-        charger_set = set((int(cx), int(cz)) for cx, cz in self.charger_cells)
+        charger_set = set((int(cx), int(cz)) for cx, cz in active_pts)
+        if not charger_set:
+            charger_set = set((int(cx), int(cz)) for cx, cz in self.charger_cells)
         start = (hx, hz)
 
         def bfs_next_actions():
@@ -635,10 +637,17 @@ class Preprocessor:
             return next_actions
 
         bfs_actions = bfs_next_actions()
+        # If current selected charger group has no reachable path hint, fallback to all known chargers.
+        # 若当前充电桩分组暂无可达路径提示，退回全局已知充电桩集合，避免选错分组长时间空转。
+        if not bfs_actions and len(charger_set) < len(self.charger_cells):
+            charger_set = set((int(cx), int(cz)) for cx, cz in self.charger_cells)
+            bfs_actions = bfs_next_actions()
 
         relax_radius = self.GUARD_NPC_DANGER_RADIUS
         if self._guard_no_progress_steps >= self.GUARD_RELAX_STUCK_STEPS:
             relax_radius = max(0, self.GUARD_NPC_DANGER_RADIUS - 1)
+        if self._guard_no_progress_steps >= (self.GUARD_RELAX_STUCK_STEPS + 5):
+            relax_radius = 0
 
         best_action = None
         best_score = float("inf")
