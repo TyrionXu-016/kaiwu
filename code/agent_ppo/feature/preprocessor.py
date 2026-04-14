@@ -921,6 +921,51 @@ class Preprocessor:
                 best_action = a
         return None if best_action is None else int(best_action)
 
+    def get_npc_safe_action_mask(self, legal_action, danger_radius=1):
+        """Mask dangerous one-step actions near NPC in normal mode."""
+        hx, hz = self.cur_pos
+        dirs = [
+            (1, 0),
+            (1, -1),
+            (0, -1),
+            (-1, -1),
+            (-1, 0),
+            (-1, 1),
+            (0, 1),
+            (1, 1),
+        ]
+
+        def passable(x, z):
+            if not (0 <= x < self.GRID_SIZE and 0 <= z < self.GRID_SIZE):
+                return False
+            return bool(self.passable_map[x, z] == 1)
+
+        safe_mask = list(legal_action)
+        for a, (dx, dz) in enumerate(dirs):
+            if a >= len(safe_mask) or int(safe_mask[a]) != 1:
+                continue
+            nx, nz = hx + dx, hz + dz
+            if not passable(nx, nz):
+                safe_mask[a] = 0
+                continue
+            if self._is_npc_danger_cell(nx, nz, radius=danger_radius):
+                safe_mask[a] = 0
+                continue
+            if dx != 0 and dz != 0:
+                side1 = passable(hx + dx, hz)
+                side2 = passable(hx, hz + dz)
+                if not (side1 or side2):
+                    safe_mask[a] = 0
+                    continue
+                if self._is_npc_danger_cell(hx + dx, hz, radius=danger_radius) and self._is_npc_danger_cell(
+                    hx, hz + dz, radius=danger_radius
+                ):
+                    safe_mask[a] = 0
+
+        if any(int(x) == 1 for x in safe_mask):
+            return safe_mask
+        return list(legal_action)
+
     def get_legal_action(self):
         """Return legal action mask (8D list).
 

@@ -98,15 +98,23 @@ class Agent(BaseAgent):
 
         # Low-battery hard guard: force heading to nearest charger when needed.
         # 低电量硬保护：必要时强制朝最近充电桩移动。
-        guard_action = self.preprocessor.get_charge_guard_action(legal_action)
+        guard_action = self.preprocessor.get_charge_guard_action(legal_action, last_action=self.last_action)
         if guard_action is not None:
             action = guard_action
             d_action = guard_action
         else:
+            # In normal mode, avoid one-step NPC danger cells when possible.
+            # 非回充模式下优先过滤一步 NPC 危险落脚点，降低高电量早停风险。
+            safe_legal = self.preprocessor.get_npc_safe_action_mask(legal_action, danger_radius=1)
+            safe_arr = np.array(safe_legal, dtype=np.float32)
+            prob = self._legal_soft_max(logits, safe_arr)
+            action = self._legal_sample(prob, use_max=False)
+            d_action = self._legal_sample(prob, use_max=True)
+
             # Coverage planner first: select frontier target and move toward it.
             # 覆盖规划优先：朝 frontier 目标推进。
             frontier_action = self.preprocessor.get_frontier_action(
-                legal_action=legal_action, last_action=self.last_action
+                legal_action=safe_legal, last_action=self.last_action
             )
             if frontier_action is not None:
                 action = frontier_action
@@ -115,7 +123,7 @@ class Agent(BaseAgent):
                 # Fallback to mild cardinal bias.
                 # 兜底使用轻量直行动作偏置。
                 cardinal_action = self.preprocessor.get_cardinal_clean_action(
-                    legal_action=legal_action, probs=prob, last_action=self.last_action
+                    legal_action=safe_legal, probs=prob, last_action=self.last_action
                 )
                 if cardinal_action is not None:
                     d_action = cardinal_action
