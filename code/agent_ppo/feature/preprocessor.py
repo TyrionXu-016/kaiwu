@@ -11,6 +11,7 @@ Feature preprocessor for Robot Vacuum.
 """
 
 import numpy as np
+from collections import deque
 
 
 def _coerce_env_reward(x):
@@ -78,6 +79,13 @@ class Preprocessor:
     NPC_CAUTION_RADIUS = 4
     NPC_DANGER_PENALTY = 1200.0
     NPC_CAUTION_COEF = 42.0
+    GUARD_PROGRESS_EPS = 0.15
+    GUARD_STUCK_STEPS = 6
+    GUARD_REVISIT_COEF = 0.9
+    CHARGE_STRICT_MARGIN = 1.5
+    GUARD_NPC_DANGER_RADIUS = 2
+    CHARGER_SWITCH_STUCK_STEPS = 10
+    CHARGE_BFS_MAX_EXPAND = 5000
     CRITICAL_BATTERY_RATIO = 0.22
     LOW_BATTERY_STEP_PENALTY = -0.0025
     CRITICAL_BATTERY_STEP_PENALTY = -0.005
@@ -130,6 +138,7 @@ class Preprocessor:
 
         self._frame_env_reward = 0.0
         self.charger_cells = []
+        self.charger_groups = {}
         self.charge_guard_triggered = 0
         self.charge_guard_trigger_count = 0
         self.memory_map = np.full((self.GRID_SIZE, self.GRID_SIZE), -1, dtype=np.int8)  # -1 unknown, 0 obstacle, 1 clean, 2 dirty
@@ -138,6 +147,9 @@ class Preprocessor:
         self.last_frontier_reselect_step = -9999
         self.in_charge_mode = False
         self.npc_positions = []
+        self._guard_prev_dist = 200.0
+        self._guard_no_progress_steps = 0
+        self._target_charger_id = None
 
     def pb2struct(self, env_obs, last_action):
         """Parse and cache essential fields from observation dict.
@@ -208,6 +220,17 @@ class Preprocessor:
             return self.NPC_CAUTION_COEF * float(self.NPC_CAUTION_RADIUS - min_d + 1)
         return 0.0
 
+    def _is_npc_danger_cell(self, x, z, radius=None):
+        """Whether cell is inside NPC collision danger area (Chebyshev <= danger radius)."""
+        if radius is None:
+            radius = self.NPC_DANGER_RADIUS
+        if not self.npc_positions:
+            return False
+        for nx, nz in self.npc_positions:
+            if max(abs(x - nx), abs(z - nz)) <= radius:
+                return True
+        return False
+
     def _update_memory_map(self, hx, hz):
         """Project 21x21 local map into global memory map."""
         view = self._view_map
@@ -235,6 +258,7 @@ class Preprocessor:
         通过 organs 解析充电桩占据的格子集合（支持 3x3 或其他尺寸）。
         """
         cells = []
+        groups = {}
         for organ in organs:
             # sub_type=1 means charger in official protocol.
             if int(organ.get("sub_type", 0)) != 1:
@@ -244,12 +268,16 @@ class Preprocessor:
             oz = int(pos.get("z", -1))
             w = max(1, int(organ.get("w", 1)))
             h = max(1, int(organ.get("h", 1)))
+            gid = int(organ.get("config_id", len(groups)))
+            if gid not in groups:
+                groups[gid] = []
             for dx in range(w):
                 for dz in range(h):
                     cx = ox + dx
                     cz = oz + dz
                     if 0 <= cx < self.GRID_SIZE and 0 <= cz < self.GRID_SIZE:
                         cells.append((cx, cz))
+                        groups[gid].append((cx, cz))
         # Fallback: some env variants may not expose organs every frame,
         # but chargers may still be encoded in local map_info as 3/4.
         # 兜底：部分环境帧不返回 organs，但 map_info 里可能仍有充电桩编码（3/4）。
@@ -257,17 +285,46 @@ class Preprocessor:
             hx, hz = self.cur_pos
             center = self.VIEW_HALF
             coords = np.argwhere((self._view_map == 3.0) | (self._view_map == 4.0))
+            if -1 not in groups:
+                groups[-1] = []
             for rx, rz in coords:
                 gx = hx + int(rx) - center
                 gz = hz + int(rz) - center
                 if 0 <= gx < self.GRID_SIZE and 0 <= gz < self.GRID_SIZE:
                     cells.append((gx, gz))
+                    groups[-1].append((gx, gz))
 
         # De-duplicate to keep distance computation stable.
         # 去重，避免重复点影响后续距离计算效率。
         if cells:
             cells = list(dict.fromkeys(cells))
+            for gid, pts in list(groups.items()):
+                groups[gid] = list(dict.fromkeys(pts))
         self.charger_cells = cells
+        self.charger_groups = groups
+
+    def _select_charger_group_points(self, force_switch=False):
+        """Select active charger group (nearest or second-nearest when stuck)."""
+        if not self.charger_groups:
+            return []
+        hx, hz = self.cur_pos
+        ranked = []
+        for gid, pts in self.charger_groups.items():
+            if not pts:
+                continue
+            arr = np.array(pts, dtype=np.float32)
+            d = float(np.min(np.sqrt((arr[:, 0] - hx) ** 2 + (arr[:, 1] - hz) ** 2)))
+            ranked.append((d, gid))
+        if not ranked:
+            return []
+        ranked.sort(key=lambda x: x[0])
+        pick_gid = ranked[0][1]
+        if force_switch and len(ranked) > 1:
+            # If stuck, switch to next nearest charger to avoid dead-end looping.
+            # 卡住时切换次近充电桩，避免围绕单桩死循环。
+            pick_gid = ranked[1][1]
+        self._target_charger_id = pick_gid
+        return self.charger_groups.get(pick_gid, [])
 
     def _update_passable(self, hx, hz):
         """Write local view into global passable map.
@@ -413,7 +470,44 @@ class Preprocessor:
         dists = np.sqrt((coords[:, 0] - center) ** 2 + (coords[:, 1] - center) ** 2)
         return float(np.min(dists))
 
-    def get_charge_guard_action(self, legal_action):
+    def _bfs_steps_to_charger(self, start, charger_set, valid_move_func):
+        """Shortest path steps from start to any charger; returns None if unreachable."""
+        if start in charger_set:
+            return 0
+        q = deque([start])
+        visited = {start}
+        depth = {start: 0}
+        dirs = [
+            (1, 0),
+            (1, -1),
+            (0, -1),
+            (-1, -1),
+            (-1, 0),
+            (-1, 1),
+            (0, 1),
+            (1, 1),
+        ]
+        expand = 0
+        while q:
+            x, z = q.popleft()
+            d0 = depth[(x, z)]
+            expand += 1
+            if expand > self.CHARGE_BFS_MAX_EXPAND:
+                return None
+            for dx, dz in dirs:
+                nx, nz = x + dx, z + dz
+                if (nx, nz) in visited:
+                    continue
+                if not valid_move_func(x, z, dx, dz):
+                    continue
+                if (nx, nz) in charger_set:
+                    return d0 + 1
+                visited.add((nx, nz))
+                depth[(nx, nz)] = d0 + 1
+                q.append((nx, nz))
+        return None
+
+    def get_charge_guard_action(self, legal_action, last_action=-1):
         """Hard safety guard: force action toward nearest charger under low battery.
 
         低电量硬保护：当电量低于阈值时，优先选择能让自身更靠近最近充电桩的合法动作。
@@ -424,7 +518,11 @@ class Preprocessor:
             return None
 
         hx, hz = self.cur_pos
-        charger_pts = np.array(self.charger_cells, dtype=np.float32)
+        use_switch = self._guard_no_progress_steps >= self.CHARGER_SWITCH_STUCK_STEPS
+        active_pts = self._select_charger_group_points(force_switch=use_switch)
+        if not active_pts:
+            active_pts = self.charger_cells
+        charger_pts = np.array(active_pts, dtype=np.float32)
         base_dist = float(np.min(np.sqrt((charger_pts[:, 0] - hx) ** 2 + (charger_pts[:, 1] - hz) ** 2)))
         if base_dist <= 0.5:
             return None
@@ -436,7 +534,15 @@ class Preprocessor:
             or float(self.battery) <= (base_dist + self.CHARGE_SAFETY_MARGIN)
         )
         if not must_charge:
+            self._guard_no_progress_steps = 0
+            self._guard_prev_dist = base_dist
             return None
+
+        if base_dist < (self._guard_prev_dist - self.GUARD_PROGRESS_EPS):
+            self._guard_no_progress_steps = 0
+        else:
+            self._guard_no_progress_steps += 1
+        self._guard_prev_dist = base_dist
 
         dirs = [
             (1, 0),    # 0 右
@@ -458,32 +564,114 @@ class Preprocessor:
             tx, tz = x + dx, z + dz
             if not passable(tx, tz):
                 return False
+            if self._is_npc_danger_cell(tx, tz, radius=self.GUARD_NPC_DANGER_RADIUS):
+                return False
             if dx != 0 and dz != 0:
                 # Diagonal anti-corner rule: at least one side neighbor passable.
                 # 斜向防穿角：水平/垂直至少一侧可通行。
-                return passable(x + dx, z) or passable(x, z + dz)
+                side_ok = passable(x + dx, z) or passable(x, z + dz)
+                if not side_ok:
+                    return False
+                if self._is_npc_danger_cell(
+                    x + dx, z, radius=self.GUARD_NPC_DANGER_RADIUS
+                ) and self._is_npc_danger_cell(x, z + dz, radius=self.GUARD_NPC_DANGER_RADIUS):
+                    return False
+                return True
             return True
 
+        opposite = {0: 4, 4: 0, 2: 6, 6: 2, 1: 5, 5: 1, 3: 7, 7: 3}
+
+        # Build local BFS target set: all visible/known charger cells.
+        # 构建 BFS 目标集合：已知充电桩格子。
+        charger_set = set((int(cx), int(cz)) for cx, cz in self.charger_cells)
+        start = (hx, hz)
+
+        def bfs_next_actions():
+            """Return set of first-step actions on shortest paths to charger."""
+            if start in charger_set:
+                return set()
+            q = deque([start])
+            visited = {start}
+            parent = {}
+            found_targets = []
+            depth = {start: 0}
+            min_depth = None
+            while q:
+                x, z = q.popleft()
+                d0 = depth[(x, z)]
+                if min_depth is not None and d0 > min_depth:
+                    break
+                if (x, z) in charger_set:
+                    found_targets.append((x, z))
+                    min_depth = d0
+                    continue
+                for a, (dx, dz) in enumerate(dirs):
+                    nx, nz = x + dx, z + dz
+                    if (nx, nz) in visited:
+                        continue
+                    if not valid_move(x, z, dx, dz):
+                        continue
+                    visited.add((nx, nz))
+                    parent[(nx, nz)] = ((x, z), a)
+                    depth[(nx, nz)] = d0 + 1
+                    q.append((nx, nz))
+            if not found_targets:
+                return set()
+            next_actions = set()
+            for tgt in found_targets:
+                cur = tgt
+                first_a = None
+                while cur in parent:
+                    prev, a = parent[cur]
+                    first_a = a
+                    cur = prev
+                    if cur == start:
+                        break
+                if first_a is not None:
+                    next_actions.add(first_a)
+            return next_actions
+
+        bfs_actions = bfs_next_actions()
+
         best_action = None
+        best_score = float("inf")
         best_dist = float("inf")
         best_safe_action = None
-        best_safe_dist = float("inf")
+        best_safe_score = float("inf")
+        best_margin_action = None
+        best_margin = -1e9
         for a, (dx, dz) in enumerate(dirs):
             if a >= len(legal_action) or int(legal_action[a]) != 1:
                 continue
             if not valid_move(hx, hz, dx, dz):
                 continue
             nx, nz = hx + dx, hz + dz
-            d = float(np.min(np.sqrt((charger_pts[:, 0] - nx) ** 2 + (charger_pts[:, 1] - nz) ** 2)))
-            if d < best_dist:
+            euclid_d = float(np.min(np.sqrt((charger_pts[:, 0] - nx) ** 2 + (charger_pts[:, 1] - nz) ** 2)))
+            bfs_steps = self._bfs_steps_to_charger((nx, nz), charger_set, valid_move)
+            if bfs_steps is None:
+                d = euclid_d + 1000.0
+            else:
+                d = float(bfs_steps)
+            npc_cost = self._npc_safety_cost(nx, nz)
+            revisit_cost = self.GUARD_REVISIT_COEF * float(min(8, int(self.visit_count[nx, nz])))
+            reverse_penalty = 0.25 if opposite.get(last_action, -1) == a else 0.0
+            bfs_bonus = -2.0 if (a in bfs_actions) else 0.0
+            score = d + 0.55 * npc_cost + revisit_cost + reverse_penalty + bfs_bonus
+
+            if score < best_score:
+                best_score = score
                 best_dist = d
                 best_action = a
             # Strict runtime safety: after this move, remaining battery must still cover nearest charger distance.
             # 严格运行时约束：执行该步后剩余电量仍需覆盖最近充电桩距离。
             remain_after_step = float(self.battery - 1)
-            if remain_after_step >= d:
-                if d < best_safe_dist:
-                    best_safe_dist = d
+            strict_margin = remain_after_step - (d + self.CHARGE_STRICT_MARGIN)
+            if strict_margin > best_margin:
+                best_margin = strict_margin
+                best_margin_action = a
+            if strict_margin >= 0.0:
+                if score < best_safe_score:
+                    best_safe_score = score
                     best_safe_action = a
 
         # Priority 1: choose safest action that keeps "battery >= charger distance" invariant.
@@ -492,6 +680,19 @@ class Preprocessor:
             self.charge_guard_triggered = 1
             self.charge_guard_trigger_count += 1
             return int(best_safe_action)
+        # If strict safe action doesn't exist, allow near-feasible action as emergency fallback.
+        # 当无严格可达动作时，仅在“接近可达”情况下放宽一步，避免完全失控。
+        if best_margin_action is not None and best_margin >= -0.5:
+            self.charge_guard_triggered = 1
+            self.charge_guard_trigger_count += 1
+            return int(best_margin_action)
+        # If stuck for several steps, allow escape action that trades a bit of distance
+        # for much safer / less repeated cells, to bypass local minima near walls.
+        # 若连续多步无进展，则允许“绕障逃逸”动作，避免在墙角原地消耗电量。
+        if self._guard_no_progress_steps >= self.GUARD_STUCK_STEPS and best_action is not None:
+            self.charge_guard_triggered = 1
+            self.charge_guard_trigger_count += 1
+            return int(best_action)
         # Priority 2 (degraded): no fully safe move available, still force nearest-charger action.
         # 优先级2（退化保护）：若无完全安全动作，仍强制选最接近充电桩的动作，尽量自救。
         if best_action is not None and best_dist < base_dist:
