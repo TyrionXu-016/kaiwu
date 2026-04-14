@@ -86,6 +86,7 @@ class Preprocessor:
     GUARD_NPC_DANGER_RADIUS = 2
     CHARGER_SWITCH_STUCK_STEPS = 10
     CHARGE_BFS_MAX_EXPAND = 5000
+    GUARD_RELAX_STUCK_STEPS = 8
     CRITICAL_BATTERY_RATIO = 0.22
     LOW_BATTERY_STEP_PENALTY = -0.0025
     CRITICAL_BATTERY_STEP_PENALTY = -0.005
@@ -560,11 +561,13 @@ class Preprocessor:
                 return False
             return bool(self.passable_map[x, z] == 1)
 
-        def valid_move(x, z, dx, dz):
+        def valid_move(x, z, dx, dz, danger_radius=None):
+            if danger_radius is None:
+                danger_radius = self.GUARD_NPC_DANGER_RADIUS
             tx, tz = x + dx, z + dz
             if not passable(tx, tz):
                 return False
-            if self._is_npc_danger_cell(tx, tz, radius=self.GUARD_NPC_DANGER_RADIUS):
+            if self._is_npc_danger_cell(tx, tz, radius=danger_radius):
                 return False
             if dx != 0 and dz != 0:
                 # Diagonal anti-corner rule: at least one side neighbor passable.
@@ -573,8 +576,8 @@ class Preprocessor:
                 if not side_ok:
                     return False
                 if self._is_npc_danger_cell(
-                    x + dx, z, radius=self.GUARD_NPC_DANGER_RADIUS
-                ) and self._is_npc_danger_cell(x, z + dz, radius=self.GUARD_NPC_DANGER_RADIUS):
+                    x + dx, z, radius=danger_radius
+                ) and self._is_npc_danger_cell(x, z + dz, radius=danger_radius):
                     return False
                 return True
             return True
@@ -633,6 +636,10 @@ class Preprocessor:
 
         bfs_actions = bfs_next_actions()
 
+        relax_radius = self.GUARD_NPC_DANGER_RADIUS
+        if self._guard_no_progress_steps >= self.GUARD_RELAX_STUCK_STEPS:
+            relax_radius = max(0, self.GUARD_NPC_DANGER_RADIUS - 1)
+
         best_action = None
         best_score = float("inf")
         best_dist = float("inf")
@@ -640,10 +647,12 @@ class Preprocessor:
         best_safe_score = float("inf")
         best_margin_action = None
         best_margin = -1e9
+        fallback_action = None
+        fallback_score = float("inf")
         for a, (dx, dz) in enumerate(dirs):
             if a >= len(legal_action) or int(legal_action[a]) != 1:
                 continue
-            if not valid_move(hx, hz, dx, dz):
+            if not valid_move(hx, hz, dx, dz, danger_radius=relax_radius):
                 continue
             nx, nz = hx + dx, hz + dz
             euclid_d = float(np.min(np.sqrt((charger_pts[:, 0] - nx) ** 2 + (charger_pts[:, 1] - nz) ** 2)))
@@ -662,6 +671,9 @@ class Preprocessor:
                 best_score = score
                 best_dist = d
                 best_action = a
+            if score < fallback_score:
+                fallback_score = score
+                fallback_action = a
             # Strict runtime safety: after this move, remaining battery must still cover nearest charger distance.
             # 严格运行时约束：执行该步后剩余电量仍需覆盖最近充电桩距离。
             remain_after_step = float(self.battery - 1)
@@ -699,6 +711,10 @@ class Preprocessor:
             self.charge_guard_triggered = 1
             self.charge_guard_trigger_count += 1
             return int(best_action)
+        if fallback_action is not None:
+            self.charge_guard_triggered = 1
+            self.charge_guard_trigger_count += 1
+            return int(fallback_action)
         return None
 
     def get_cardinal_clean_action(self, legal_action, probs, last_action):
