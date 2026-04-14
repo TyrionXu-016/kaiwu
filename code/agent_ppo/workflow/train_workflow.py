@@ -142,6 +142,8 @@ class EpisodeRunner:
                     nearest_charger_dist = float(getattr(fm, "nearest_charger_dist", 200.0))
                     battery_minus_charger_dist = float(remaining_charge) - float(nearest_charger_dist)
                     guard_count = int(getattr(fm, "charge_guard_trigger_count", 0))
+                    guard_min_charger_dist = float(getattr(fm, "guard_min_charger_dist", 200.0))
+                    guard_terminal_override_count = int(getattr(fm, "guard_terminal_override_count", 0))
                     result_code = int(extra_info.get("result_code", -1))
                     result_message = str(extra_info.get("result_message", ""))
 
@@ -165,6 +167,8 @@ class EpisodeRunner:
                         f"nearest_charger_dist:{nearest_charger_dist:.2f} "
                         f"battery_minus_charger_dist:{battery_minus_charger_dist:.2f} "
                         f"guard_count:{guard_count} "
+                        f"guard_min_charger_dist:{guard_min_charger_dist:.2f} "
+                        f"guard_terminal_override_count:{guard_terminal_override_count} "
                         f"terminated:{terminated} truncated:{truncated} "
                         f"result_code:{result_code} result_message:{result_message}"
                     )
@@ -206,6 +210,8 @@ class EpisodeRunner:
                                     "nearest_charger_dist": nearest_charger_dist,
                                     "battery_minus_charger_dist": battery_minus_charger_dist,
                                     "charge_guard_count": guard_count,
+                                    "guard_min_charger_dist": guard_min_charger_dist,
+                                    "guard_terminal_override_count": guard_terminal_override_count,
                                 }
                             }
                         )

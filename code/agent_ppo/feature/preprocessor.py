@@ -87,6 +87,7 @@ class Preprocessor:
     CHARGER_SWITCH_STUCK_STEPS = 10
     CHARGE_BFS_MAX_EXPAND = 5000
     GUARD_RELAX_STUCK_STEPS = 8
+    CHARGE_TERMINAL_DIST = 4.0
     CRITICAL_BATTERY_RATIO = 0.22
     LOW_BATTERY_STEP_PENALTY = -0.0025
     CRITICAL_BATTERY_STEP_PENALTY = -0.005
@@ -151,6 +152,8 @@ class Preprocessor:
         self._guard_prev_dist = 200.0
         self._guard_no_progress_steps = 0
         self._target_charger_id = None
+        self.guard_min_charger_dist = 200.0
+        self.guard_terminal_override_count = 0
 
     def pb2struct(self, env_obs, last_action):
         """Parse and cache essential fields from observation dict.
@@ -538,6 +541,7 @@ class Preprocessor:
             self._guard_no_progress_steps = 0
             self._guard_prev_dist = base_dist
             return None
+        self.guard_min_charger_dist = min(float(self.guard_min_charger_dist), float(base_dist))
 
         if base_dist < (self._guard_prev_dist - self.GUARD_PROGRESS_EPS):
             self._guard_no_progress_steps = 0
@@ -648,6 +652,32 @@ class Preprocessor:
             relax_radius = max(0, self.GUARD_NPC_DANGER_RADIUS - 1)
         if self._guard_no_progress_steps >= (self.GUARD_RELAX_STUCK_STEPS + 5):
             relax_radius = 0
+
+        # Terminal charger approach override:
+        # when already close to charger, prioritize direct charger-enter action and reduce detours.
+        # 贴桩阶段强接管：临近充电桩时优先直入桩格，减少桩边抖动导致的耗尽。
+        if base_dist <= self.CHARGE_TERMINAL_DIST:
+            self.guard_terminal_override_count += 1
+            term_best_action = None
+            term_best_d = float("inf")
+            for a, (dx, dz) in enumerate(dirs):
+                if a >= len(legal_action) or int(legal_action[a]) != 1:
+                    continue
+                if not valid_move(hx, hz, dx, dz, danger_radius=0):
+                    continue
+                nx, nz = hx + dx, hz + dz
+                if (nx, nz) in charger_set:
+                    self.charge_guard_triggered = 1
+                    self.charge_guard_trigger_count += 1
+                    return int(a)
+                d_term = float(np.min(np.sqrt((charger_pts[:, 0] - nx) ** 2 + (charger_pts[:, 1] - nz) ** 2)))
+                if d_term < term_best_d:
+                    term_best_d = d_term
+                    term_best_action = a
+            if term_best_action is not None:
+                self.charge_guard_triggered = 1
+                self.charge_guard_trigger_count += 1
+                return int(term_best_action)
 
         best_action = None
         best_score = float("inf")
