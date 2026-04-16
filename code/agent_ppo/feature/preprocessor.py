@@ -81,18 +81,18 @@ class Preprocessor:
     NPC_DANGER_PENALTY = 800.0
     NPC_CAUTION_COEF = 30.0
     GUARD_PROGRESS_EPS = 0.15
-    GUARD_STUCK_STEPS = 8
+    GUARD_STUCK_STEPS = 5
     GUARD_REVISIT_COEF = 0.6
     CHARGE_STRICT_MARGIN = 15.0
     GUARD_NPC_DANGER_RADIUS = 1
-    CHARGER_SWITCH_STUCK_STEPS = 8
-    CHARGE_BFS_MAX_EXPAND = 8000
-    GUARD_RELAX_STUCK_STEPS = 10
-    CHARGE_TERMINAL_DIST = 8.0
-    CHARGE_NEAR_DIST = 25.0
-    CRITICAL_BATTERY_RATIO = 0.25
-    LOW_BATTERY_STEP_PENALTY = -0.003
-    CRITICAL_BATTERY_STEP_PENALTY = -0.006
+    CHARGER_SWITCH_STUCK_STEPS = 5
+    CHARGE_BFS_MAX_EXPAND = 12000
+    GUARD_RELAX_STUCK_STEPS = 5
+    CHARGE_TERMINAL_DIST = 10.0
+    CHARGE_NEAR_DIST = 30.0
+    CRITICAL_BATTERY_RATIO = 0.20
+    LOW_BATTERY_STEP_PENALTY = -0.002
+    CRITICAL_BATTERY_STEP_PENALTY = -0.004
     # Keep a positive safety margin between current battery and nearest charger distance.
     BATTERY_MARGIN_TARGET = 80.0
     BATTERY_MARGIN_PENALTY_COEF = 0.001
@@ -654,9 +654,15 @@ class Preprocessor:
             bfs_actions = bfs_next_actions()
 
         relax_radius = self.GUARD_NPC_DANGER_RADIUS
-        if self._guard_no_progress_steps >= self.GUARD_RELAX_STUCK_STEPS:
+        # Faster relaxation when stuck or low battery
+        # 更快放宽NPC避让：卡住或低电量时减少避让
+        if self._guard_no_progress_steps >= 3:
             relax_radius = max(0, self.GUARD_NPC_DANGER_RADIUS - 1)
-        if self._guard_no_progress_steps >= (self.GUARD_RELAX_STUCK_STEPS + 5):
+        if self._guard_no_progress_steps >= 6:
+            relax_radius = 0
+        # Emergency: very low battery, ignore NPC danger completely
+        # 紧急情况：电量极低时完全忽略NPC危险
+        if self.battery <= 50:
             relax_radius = 0
 
         # Terminal charger approach override:
