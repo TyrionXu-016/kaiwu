@@ -56,15 +56,15 @@ class Preprocessor:
     CHARGE_GAIN_COEF = 0.01
 
     APPROACH_CHARGER_REWARD = 0.02
-    LOW_BATTERY_RATIO = 0.35
-    HARD_GUARD_BATTERY_RATIO = 0.25
+    LOW_BATTERY_RATIO = 0.20
+    HARD_GUARD_BATTERY_RATIO = 0.10
     # Absolute guard threshold: when battery <= this value, force go charge.
     # 绝对电量阈值：当电量低于该值时，硬保护强制回充。
     # 注意：battery_max 可配置为 100~999，需确保此值足够大以覆盖最远充电桩距离。
-    HARD_GUARD_BATTERY_ABS = 150
+    HARD_GUARD_BATTERY_ABS = 80
     # Runtime safety margin for “battery vs nearest charger distance” constraint.
     # 运行时安全余量：用于约束”电量必须覆盖最近充电桩距离”。
-    CHARGE_SAFETY_MARGIN = 40.0
+    CHARGE_SAFETY_MARGIN = 15.0
     # Prefer cardinal moves for coverage pattern (0/2/4/6) in non-charging mode.
     # 非回充模式下优先上下左右，减少斜线清扫。
     ENABLE_CARDINAL_CLEAN_BIAS = True
@@ -821,9 +821,9 @@ class Preprocessor:
             pass
 
         br = float(self.battery) / float(max(self.battery_max, 1))
-        # Do not apply cleaning bias when charging guard may be needed.
-        # 回充优先级更高：低电时不做平铺偏置接管。
-        if self.battery <= self.HARD_GUARD_BATTERY_ABS or br < self.HARD_GUARD_BATTERY_RATIO:
+        # Only skip cardinal bias when battery is critically low
+        # 仅在电量极低时不做平铺偏置接管
+        if self.battery <= self.HARD_GUARD_BATTERY_ABS:
             return None
 
         hx, hz = self.cur_pos
@@ -874,6 +874,10 @@ class Preprocessor:
         if need_charge:
             self.in_charge_mode = True
         elif self.battery >= self.CHARGE_MODE_EXIT_BATTERY:
+            self.in_charge_mode = False
+        # Allow frontier planning when battery is still high enough to clean
+        # 电量足够时允许继续清扫，即使之前短暂进入过charge mode
+        if self.battery > (self.nearest_charger_dist + self.CHARGE_SAFETY_MARGIN + 50):
             self.in_charge_mode = False
         return self.in_charge_mode
 
@@ -936,9 +940,9 @@ class Preprocessor:
         """
         if not self.ENABLE_FRONTIER_PLANNER:
             return None
-        if self._in_charge_mode_now():
-            # Pause coverage task in low-battery mode.
-            # 低电量切换回充模式，暂停覆盖目标。
+        # Only pause coverage when battery is critically low
+        # 仅在电量极低时暂停覆盖任务
+        if self._in_charge_mode_now() and self.battery < self.HARD_GUARD_BATTERY_ABS:
             self.frontier_target = None
             return None
 
