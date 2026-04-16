@@ -57,11 +57,11 @@ class Preprocessor:
 
     APPROACH_CHARGER_REWARD = 0.02
     LOW_BATTERY_RATIO = 0.50
-    HARD_GUARD_BATTERY_RATIO = 0.35
+    HARD_GUARD_BATTERY_RATIO = 0.40
     # Absolute guard threshold: when battery <= this value, force go charge.
     # 绝对电量阈值：当电量低于该值时，硬保护强制回充。
     # 注意：battery_max 可配置为 100~999，需确保此值足够大以覆盖最远充电桩距离。
-    HARD_GUARD_BATTERY_ABS = 150
+    HARD_GUARD_BATTERY_ABS = 200
     # Runtime safety margin for “battery vs nearest charger distance” constraint.
     # 运行时安全余量：用于约束”电量必须覆盖最近充电桩距离”。
     CHARGE_SAFETY_MARGIN = 60.0
@@ -656,13 +656,13 @@ class Preprocessor:
         relax_radius = self.GUARD_NPC_DANGER_RADIUS
         # Faster relaxation when stuck or low battery
         # 更快放宽NPC避让：卡住或低电量时减少避让
-        if self._guard_no_progress_steps >= 3:
+        if self._guard_no_progress_steps >= 2:
             relax_radius = max(0, self.GUARD_NPC_DANGER_RADIUS - 1)
-        if self._guard_no_progress_steps >= 6:
+        if self._guard_no_progress_steps >= 4:
             relax_radius = 0
-        # Emergency: very low battery, ignore NPC danger completely
-        # 紧急情况：电量极低时完全忽略NPC危险
-        if self.battery <= 50:
+        # Emergency: low battery, ignore NPC danger completely
+        # 紧急情况：低电量时完全忽略NPC危险
+        if self.battery <= 100:
             relax_radius = 0
 
         # Terminal charger approach override:
