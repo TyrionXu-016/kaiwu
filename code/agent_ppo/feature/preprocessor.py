@@ -56,15 +56,15 @@ class Preprocessor:
     CHARGE_GAIN_COEF = 0.01
 
     APPROACH_CHARGER_REWARD = 0.02
-    LOW_BATTERY_RATIO = 0.35
-    HARD_GUARD_BATTERY_RATIO = 0.20
+    LOW_BATTERY_RATIO = 0.50
+    HARD_GUARD_BATTERY_RATIO = 0.35
     # Absolute guard threshold: when battery <= this value, force go charge.
     # 绝对电量阈值：当电量低于该值时，硬保护强制回充。
-    # 注意：默认满电为200，此值必须小于满电，否则开局就触发强制回充。
-    HARD_GUARD_BATTERY_ABS = 40
+    # 注意：battery_max 可配置为 100~999，需确保此值足够大以覆盖最远充电桩距离。
+    HARD_GUARD_BATTERY_ABS = 150
     # Runtime safety margin for “battery vs nearest charger distance” constraint.
     # 运行时安全余量：用于约束”电量必须覆盖最近充电桩距离”。
-    CHARGE_SAFETY_MARGIN = 8.0
+    CHARGE_SAFETY_MARGIN = 60.0
     # Prefer cardinal moves for coverage pattern (0/2/4/6) in non-charging mode.
     # 非回充模式下优先上下左右，减少斜线清扫。
     ENABLE_CARDINAL_CLEAN_BIAS = True
@@ -73,7 +73,7 @@ class Preprocessor:
     FRONTIER_RESELECT_INTERVAL = 20
     REVISIT_PENALTY_COEF = -0.0012
     REVISIT_PENALTY_CAP = 8
-    CHARGE_MODE_EXIT_BATTERY = 180
+    CHARGE_MODE_EXIT_BATTERY = 600
     # NPC safety cost for frontier planning.
     # Frontier 选点和落脚动作都会计入 NPC 安全代价（切比雪夫距离）。
     NPC_DANGER_RADIUS = 1
@@ -83,18 +83,18 @@ class Preprocessor:
     GUARD_PROGRESS_EPS = 0.15
     GUARD_STUCK_STEPS = 8
     GUARD_REVISIT_COEF = 0.6
-    CHARGE_STRICT_MARGIN = 3.0
+    CHARGE_STRICT_MARGIN = 15.0
     GUARD_NPC_DANGER_RADIUS = 1
     CHARGER_SWITCH_STUCK_STEPS = 8
     CHARGE_BFS_MAX_EXPAND = 8000
     GUARD_RELAX_STUCK_STEPS = 10
-    CHARGE_TERMINAL_DIST = 5.0
-    CHARGE_NEAR_DIST = 12.0
-    CRITICAL_BATTERY_RATIO = 0.18
+    CHARGE_TERMINAL_DIST = 8.0
+    CHARGE_NEAR_DIST = 25.0
+    CRITICAL_BATTERY_RATIO = 0.25
     LOW_BATTERY_STEP_PENALTY = -0.003
     CRITICAL_BATTERY_STEP_PENALTY = -0.006
     # Keep a positive safety margin between current battery and nearest charger distance.
-    BATTERY_MARGIN_TARGET = 25.0
+    BATTERY_MARGIN_TARGET = 80.0
     BATTERY_MARGIN_PENALTY_COEF = 0.001
     BATTERY_MARGIN_LOW_BATTERY_MULT = 1.5
 
