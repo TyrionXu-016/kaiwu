@@ -569,7 +569,9 @@ class Preprocessor:
         def passable(x, z):
             if not (0 <= x < self.GRID_SIZE and 0 <= z < self.GRID_SIZE):
                 return False
-            return bool(self.passable_map[x, z] == 1)
+            # 0 = obstacle, 1/2/3/4 = passable (including charger cells)
+            # 充电桩格子(3/4)也是可通行的
+            return bool(self.passable_map[x, z] >= 1)
 
         def valid_move(x, z, dx, dz, danger_radius=None):
             if danger_radius is None:
@@ -837,7 +839,9 @@ class Preprocessor:
         def passable(x, z):
             if not (0 <= x < self.GRID_SIZE and 0 <= z < self.GRID_SIZE):
                 return False
-            return bool(self.passable_map[x, z] == 1)
+            # 0 = obstacle, 1/2/3/4 = passable (including charger cells)
+            # 充电桩格子(3/4)也是可通行的
+            return bool(self.passable_map[x, z] >= 1)
 
         best_a = None
         best_score = -1e9
@@ -970,7 +974,9 @@ class Preprocessor:
         def passable(x, z):
             if not (0 <= x < self.GRID_SIZE and 0 <= z < self.GRID_SIZE):
                 return False
-            return bool(self.passable_map[x, z] == 1)
+            # 0 = obstacle, 1/2/3/4 = passable (including charger cells)
+            # 充电桩格子(3/4)也是可通行的
+            return bool(self.passable_map[x, z] >= 1)
 
         def valid_move(x, z, dx, dz):
             nx, nz = x + dx, z + dz
@@ -1017,7 +1023,9 @@ class Preprocessor:
         def passable(x, z):
             if not (0 <= x < self.GRID_SIZE and 0 <= z < self.GRID_SIZE):
                 return False
-            return bool(self.passable_map[x, z] == 1)
+            # 0 = obstacle, 1/2/3/4 = passable (including charger cells)
+            # 充电桩格子(3/4)也是可通行的
+            return bool(self.passable_map[x, z] >= 1)
 
         safe_mask = list(legal_action)
         for a, (dx, dz) in enumerate(dirs):
