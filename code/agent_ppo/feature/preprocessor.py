@@ -56,15 +56,15 @@ class Preprocessor:
     CHARGE_GAIN_COEF = 0.01
 
     APPROACH_CHARGER_REWARD = 0.02
-    LOW_BATTERY_RATIO = 0.25
-    HARD_GUARD_BATTERY_RATIO = 0.15
+    LOW_BATTERY_RATIO = 0.35
+    HARD_GUARD_BATTERY_RATIO = 0.25
     # Absolute guard threshold: when battery <= this value, force go charge.
     # 绝对电量阈值：当电量低于该值时，硬保护强制回充。
     # 注意：battery_max 可配置为 100~999，需确保此值足够大以覆盖最远充电桩距离。
-    HARD_GUARD_BATTERY_ABS = 80
+    HARD_GUARD_BATTERY_ABS = 150
     # Runtime safety margin for “battery vs nearest charger distance” constraint.
     # 运行时安全余量：用于约束”电量必须覆盖最近充电桩距离”。
-    CHARGE_SAFETY_MARGIN = 20.0
+    CHARGE_SAFETY_MARGIN = 40.0
     # Prefer cardinal moves for coverage pattern (0/2/4/6) in non-charging mode.
     # 非回充模式下优先上下左右，减少斜线清扫。
     ENABLE_CARDINAL_CLEAN_BIAS = True
@@ -83,7 +83,7 @@ class Preprocessor:
     GUARD_PROGRESS_EPS = 0.15
     GUARD_STUCK_STEPS = 5
     GUARD_REVISIT_COEF = 0.6
-    CHARGE_STRICT_MARGIN = 15.0
+    CHARGE_STRICT_MARGIN = 30.0
     GUARD_NPC_DANGER_RADIUS = 1
     CHARGER_SWITCH_STUCK_STEPS = 5
     CHARGE_BFS_MAX_EXPAND = 12000
