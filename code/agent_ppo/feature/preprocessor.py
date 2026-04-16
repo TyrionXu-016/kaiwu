@@ -56,15 +56,15 @@ class Preprocessor:
     CHARGE_GAIN_COEF = 0.01
 
     APPROACH_CHARGER_REWARD = 0.02
-    LOW_BATTERY_RATIO = 0.50
-    HARD_GUARD_BATTERY_RATIO = 0.40
+    LOW_BATTERY_RATIO = 0.25
+    HARD_GUARD_BATTERY_RATIO = 0.15
     # Absolute guard threshold: when battery <= this value, force go charge.
     # 绝对电量阈值：当电量低于该值时，硬保护强制回充。
     # 注意：battery_max 可配置为 100~999，需确保此值足够大以覆盖最远充电桩距离。
-    HARD_GUARD_BATTERY_ABS = 200
+    HARD_GUARD_BATTERY_ABS = 80
     # Runtime safety margin for “battery vs nearest charger distance” constraint.
     # 运行时安全余量：用于约束”电量必须覆盖最近充电桩距离”。
-    CHARGE_SAFETY_MARGIN = 60.0
+    CHARGE_SAFETY_MARGIN = 20.0
     # Prefer cardinal moves for coverage pattern (0/2/4/6) in non-charging mode.
     # 非回充模式下优先上下左右，减少斜线清扫。
     ENABLE_CARDINAL_CLEAN_BIAS = True
@@ -73,7 +73,7 @@ class Preprocessor:
     FRONTIER_RESELECT_INTERVAL = 20
     REVISIT_PENALTY_COEF = -0.0012
     REVISIT_PENALTY_CAP = 8
-    CHARGE_MODE_EXIT_BATTERY = 600
+    CHARGE_MODE_EXIT_BATTERY = 400
     # NPC safety cost for frontier planning.
     # Frontier 选点和落脚动作都会计入 NPC 安全代价（切比雪夫距离）。
     NPC_DANGER_RADIUS = 1
@@ -100,10 +100,10 @@ class Preprocessor:
 
     # Primary signal: matches official score direction (more cleaned tiles -> higher reward).
     # 主信号：与「清扫地面数量」一致，权重大于各类塑形。
-    CLEANING_TILE_WEIGHT = 0.25
+    CLEANING_TILE_WEIGHT = 0.5
 
-    STEP_PENALTY_IDLE = -0.0015
-    STEP_PENALTY_ACTIVE = -0.0003
+    STEP_PENALTY_IDLE = -0.001
+    STEP_PENALTY_ACTIVE = -0.0001
 
     # Blend official env_reward (per-step task score delta) into RL reward; set 0 if it double-counts with cleaning.
     # 将环境返回的 env_reward（与任务得分相关）混入训练回报；若与 dirt_cleaned 重复可改为 0。
