@@ -56,7 +56,7 @@ def workflow(envs, agents, logger=None, monitor=None, *args, **kwargs):
 
 class EpisodeRunner:
     # Keep a fraction of guard-forced samples to avoid starving PPO updates.
-    GUARD_SAMPLE_KEEP_PROB = 0.35
+    GUARD_SAMPLE_KEEP_PROB = 0.45
 
     def __init__(self, env, agent, usr_conf, logger, monitor):
         self.env = env
