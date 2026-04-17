@@ -32,14 +32,14 @@ class Config:
     # 单头价值
     VALUE_NUM = 1
 
-    # PPO hyperparameters
-    # PPO 超参数
+    # PPO hyperparameters - tuned for stable learning
+    # PPO 超参数 - 调优以稳定学习
     GAMMA = 0.99
     LAMDA = 0.95
 
-    INIT_LEARNING_RATE_START = 0.0003
-    BETA_START = 0.01
-    CLIP_PARAM = 0.2
+    INIT_LEARNING_RATE_START = 0.0001
+    BETA_START = 0.005
+    CLIP_PARAM = 0.15
     VF_COEF = 0.5
 
     LABEL_SIZE_LIST = [ACTION_NUM]

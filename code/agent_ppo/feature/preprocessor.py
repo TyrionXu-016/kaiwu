@@ -56,12 +56,12 @@ class Preprocessor:
     CHARGE_GAIN_COEF = 0.01
 
     APPROACH_CHARGER_REWARD = 0.02
-    LOW_BATTERY_RATIO = 0.20
-    HARD_GUARD_BATTERY_RATIO = 0.10
+    LOW_BATTERY_RATIO = 0.30
+    HARD_GUARD_BATTERY_RATIO = 0.20
     # Absolute guard threshold: when battery <= this value, force go charge.
     # 绝对电量阈值：当电量低于该值时，硬保护强制回充。
     # 注意：battery_max 可配置为 100~999，需确保此值足够大以覆盖最远充电桩距离。
-    HARD_GUARD_BATTERY_ABS = 80
+    HARD_GUARD_BATTERY_ABS = 150
     # Runtime safety margin for “battery vs nearest charger distance” constraint.
     # 运行时安全余量：用于约束”电量必须覆盖最近充电桩距离”。
     CHARGE_SAFETY_MARGIN = 15.0
@@ -85,12 +85,12 @@ class Preprocessor:
     GUARD_REVISIT_COEF = 0.6
     CHARGE_STRICT_MARGIN = 30.0
     GUARD_NPC_DANGER_RADIUS = 1
-    CHARGER_SWITCH_STUCK_STEPS = 5
-    CHARGE_BFS_MAX_EXPAND = 12000
-    GUARD_RELAX_STUCK_STEPS = 5
-    CHARGE_TERMINAL_DIST = 10.0
-    CHARGE_NEAR_DIST = 30.0
-    CRITICAL_BATTERY_RATIO = 0.20
+    CHARGER_SWITCH_STUCK_STEPS = 3
+    CHARGE_BFS_MAX_EXPAND = 15000
+    GUARD_RELAX_STUCK_STEPS = 3
+    CHARGE_TERMINAL_DIST = 15.0
+    CHARGE_NEAR_DIST = 40.0
+    CRITICAL_BATTERY_RATIO = 0.25
     LOW_BATTERY_STEP_PENALTY = -0.002
     CRITICAL_BATTERY_STEP_PENALTY = -0.004
     # Keep a positive safety margin between current battery and nearest charger distance.
@@ -659,13 +659,14 @@ class Preprocessor:
         relax_radius = self.GUARD_NPC_DANGER_RADIUS
         # Faster relaxation when stuck or low battery
         # 更快放宽NPC避让：卡住或低电量时减少避让
-        if self._guard_no_progress_steps >= 2:
+        if self._guard_no_progress_steps >= 1:
             relax_radius = max(0, self.GUARD_NPC_DANGER_RADIUS - 1)
-        if self._guard_no_progress_steps >= 4:
+        if self._guard_no_progress_steps >= 2:
             relax_radius = 0
         # Emergency: low battery, ignore NPC danger completely
         # 紧急情况：低电量时完全忽略NPC危险
-        if self.battery <= 100:
+        br = float(self.battery) / float(max(self.battery_max, 1))
+        if br <= 0.25 or self.battery <= 200:
             relax_radius = 0
 
         # Terminal charger approach override:
