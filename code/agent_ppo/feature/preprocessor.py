@@ -676,6 +676,18 @@ class Preprocessor:
             self.guard_terminal_override_count += 1
             term_best_action = None
             term_best_d = float("inf")
+            # First try with no NPC danger check at all
+            for a, (dx, dz) in enumerate(dirs):
+                if a >= len(legal_action) or int(legal_action[a]) != 1:
+                    continue
+                nx, nz = hx + dx, hz + dz
+                if not passable(nx, nz):
+                    continue
+                if (nx, nz) in charger_set:
+                    self.charge_guard_triggered = 1
+                    self.charge_guard_trigger_count += 1
+                    return int(a)
+            # Then try moves that get closer to charger
             for a, (dx, dz) in enumerate(dirs):
                 if a >= len(legal_action) or int(legal_action[a]) != 1:
                     continue
@@ -703,6 +715,17 @@ class Preprocessor:
             near_danger_radius = max(0, relax_radius - 1)
             near_best_action = None
             near_best_score = float("inf")
+            # First try direct charger entry with no NPC check
+            for a, (dx, dz) in enumerate(dirs):
+                if a >= len(legal_action) or int(legal_action[a]) != 1:
+                    continue
+                nx, nz = hx + dx, hz + dz
+                if not passable(nx, nz):
+                    continue
+                if (nx, nz) in charger_set:
+                    self.charge_guard_triggered = 1
+                    self.charge_guard_trigger_count += 1
+                    return int(a)
             for a, (dx, dz) in enumerate(dirs):
                 if a >= len(legal_action) or int(legal_action[a]) != 1:
                     continue
