@@ -354,6 +354,12 @@ class Preprocessor:
                     # 0 = 障碍, 1/2 = 可通行
                     self.passable_map[gx, gz] = 1 if view[ri, ci] != 0 else 0
 
+        # Force charger cells to be passable (they may be temporarily blocked by NPC)
+        # 强制充电桩格子可通行（可能被NPC临时阻挡）
+        for cx, cz in self.charger_cells:
+            if 0 <= cx < self.GRID_SIZE and 0 <= cz < self.GRID_SIZE:
+                self.passable_map[cx, cz] = 1
+
     def _get_local_view_feature(self):
         """Local view feature (49D): crop center 7×7 from 21×21.
 
