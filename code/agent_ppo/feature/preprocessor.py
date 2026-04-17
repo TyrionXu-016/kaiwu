@@ -818,35 +818,31 @@ class Preprocessor:
                     best_safe_score = score
                     best_safe_action = a
 
-        # Priority 1: choose safest action that keeps "battery >= charger distance" invariant.
-        # 优先级1：选择满足“电量>=最近充电桩距离”不变式的动作。
+        # Priority 1: choose safest action that keeps “battery >= charger distance” invariant.
+        # 优先级1：选择满足”电量>=最近充电桩距离”不变式的动作。
         if best_safe_action is not None:
             self.charge_guard_triggered = 1
             self.charge_guard_trigger_count += 1
             return int(best_safe_action)
         # If strict safe action doesn't exist, allow near-feasible action as emergency fallback.
-        # 当无严格可达动作时，仅在“接近可达”情况下放宽一步，避免完全失控。
+        # 当无严格可达动作时，仅在”接近可达”情况下放宽一步，避免完全失控。
         if best_margin_action is not None and best_margin >= -0.5:
             self.charge_guard_triggered = 1
             self.charge_guard_trigger_count += 1
             return int(best_margin_action)
         # If stuck for several steps, allow escape action that trades a bit of distance
         # for much safer / less repeated cells, to bypass local minima near walls.
-        # 若连续多步无进展，则允许“绕障逃逸”动作，避免在墙角原地消耗电量。
+        # 若连续多步无进展，则允许”绕障逃逸”动作，避免在墙角原地消耗电量。
         if self._guard_no_progress_steps >= self.GUARD_STUCK_STEPS and best_action is not None:
             self.charge_guard_triggered = 1
             self.charge_guard_trigger_count += 1
             return int(best_action)
         # Priority 2 (degraded): no fully safe move available, still force nearest-charger action.
         # 优先级2（退化保护）：若无完全安全动作，仍强制选最接近充电桩的动作，尽量自救。
-        if best_action is not None and best_dist < base_dist:
+        if best_action is not None:
             self.charge_guard_triggered = 1
             self.charge_guard_trigger_count += 1
             return int(best_action)
-        if fallback_action is not None:
-            self.charge_guard_triggered = 1
-            self.charge_guard_trigger_count += 1
-            return int(fallback_action)
         return None
 
     def get_cardinal_clean_action(self, legal_action, probs, last_action):
