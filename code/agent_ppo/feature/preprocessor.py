@@ -691,9 +691,9 @@ class Preprocessor:
                     self.charge_guard_trigger_count += 1
                     return int(a)
                 charger_entry_blocked.append((a, f"not_charger_set,dist={np.min(np.sqrt((charger_pts[:, 0] - nx) ** 2 + (charger_pts[:, 1] - nz) ** 2)):.1f}"))
-            # Log why we can't enter charger
-            if self.guard_terminal_override_count <= 5:
-                print(f"[GUARD_DEBUG] ep={getattr(self, 'step_no', 0)} pos=({hx},{hz}) charger_set={list(charger_set)[:3]} blocked={charger_entry_blocked}")
+            # Log why we can't enter charger (log first 3 times and every 50th time)
+            if self.guard_terminal_override_count <= 3 or self.guard_terminal_override_count % 50 == 0:
+                print(f"[GUARD_DEBUG] ep={getattr(self, 'step_no', 0)} pos=({hx},{hz}) base_dist={base_dist:.1f} charger_set={list(charger_set)[:3]} blocked={charger_entry_blocked}")
             # Then try moves that get closer to charger
             for a, (dx, dz) in enumerate(dirs):
                 if a >= len(legal_action) or int(legal_action[a]) != 1:
