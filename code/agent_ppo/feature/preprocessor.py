@@ -538,10 +538,11 @@ class Preprocessor:
             return None
 
         br = float(self.battery) / float(max(self.battery_max, 1))
+        # Only trigger guard when battery is truly critical
+        # 仅在电量真正危急时触发guard
         must_charge = (
             self.battery <= self.HARD_GUARD_BATTERY_ABS
             or br < self.HARD_GUARD_BATTERY_RATIO
-            or float(self.battery) <= (base_dist + self.CHARGE_SAFETY_MARGIN)
         )
         if not must_charge:
             self._guard_no_progress_steps = 0
