@@ -52,6 +52,8 @@ services:
   # ==================== Learner 学习器 ====================
   learner:
     image: 'kaiwu-pub.tencentcloudcr.com/project/${KAIWU_PROJECT_CODE}/edu/win_gpu:${KAIWU_PROJECT_VERSION}'
+    container_name: kaiwu-train-learner-1
+    hostname: learner
     volumes:
       - shared_volume_model:/workspace/train/backup_model
       - shared_volume_train:/workspace/train
@@ -83,6 +85,8 @@ services:
   # ==================== AISrv AI服务器 ====================
   aisrv:
     image: 'kaiwu-pub.tencentcloudcr.com/project/${KAIWU_PROJECT_CODE}/edu/win_gpu:${KAIWU_PROJECT_VERSION}'
+    container_name: kaiwu-train-aisrv-1
+    hostname: aisrv
     volumes:
       - shared_volume_model:/workspace/train/backup_model
       - shared_volume_train:/workspace/train
@@ -100,8 +104,8 @@ services:
       - bash
       - '-c'
       - 'bash /root/tools/start_train_client.sh aisrv'
-    scale: ${KAIWU_AISRV_NUM}
     profiles:
+      - single
       - distributed
 
   # ==================== KaiwuEnv 环境包装器 ====================
@@ -126,6 +130,8 @@ services:
   # ==================== GameCore 游戏核心 ====================
   gamecore:
     image: 'kaiwu-pub.tencentcloudcr.com/project/${KAIWU_PROJECT_CODE}/edu/gamecore_${KAIWU_CPU_TYPE}:${KAIWU_PROJECT_VERSION}'
+    container_name: kaiwu-train-gamecore-1
+    hostname: gamecore
     restart: always
     volumes:
       - '${KAIWU_LICENSE_PATH}:/sgame/license.dat'
@@ -138,7 +144,9 @@ services:
       - bash
       - '-c'
       - "bash /root/tools/start_train_client.sh gamecore"
-    scale: ${KAIWU_GAMECORE_NUM}
+    profiles:
+      - single
+      - distributed
 
  # ==================== Backup Model 模型备份服务 ====================
   backup_model:

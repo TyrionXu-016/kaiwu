@@ -57,14 +57,14 @@ class Preprocessor:
 
     APPROACH_CHARGER_REWARD = 0.02
     LOW_BATTERY_RATIO = 0.30
-    HARD_GUARD_BATTERY_RATIO = 0.20
+    HARD_GUARD_BATTERY_RATIO = 0.45  # Increased from 0.35 for earlier guard trigger
     # Absolute guard threshold: when battery <= this value, force go charge.
     # 绝对电量阈值：当电量低于该值时，硬保护强制回充。
     # 注意：battery_max 可配置为 100~999，需确保此值足够大以覆盖最远充电桩距离。
-    HARD_GUARD_BATTERY_ABS = 150
-    # Runtime safety margin for “battery vs nearest charger distance” constraint.
-    # 运行时安全余量：用于约束”电量必须覆盖最近充电桩距离”。
-    CHARGE_SAFETY_MARGIN = 15.0
+    HARD_GUARD_BATTERY_ABS = 350  # Increased from 250 for even earlier guard trigger
+    # Runtime safety margin for "battery vs nearest charger distance" constraint.
+    # 运行时安全余量：用于约束"电量必须覆盖最近充电桩距离"。
+    CHARGE_SAFETY_MARGIN = 80.0  # Increased from 50 for more safety buffer
     # Prefer cardinal moves for coverage pattern (0/2/4/6) in non-charging mode.
     # 非回充模式下优先上下左右，减少斜线清扫。
     ENABLE_CARDINAL_CLEAN_BIAS = True
@@ -88,7 +88,7 @@ class Preprocessor:
     CHARGER_SWITCH_STUCK_STEPS = 3
     CHARGE_BFS_MAX_EXPAND = 15000
     GUARD_RELAX_STUCK_STEPS = 3
-    CHARGE_TERMINAL_DIST = 15.0
+    CHARGE_TERMINAL_DIST = 5.0  # Only apply terminal override when truly adjacent to charger
     CHARGE_NEAR_DIST = 40.0
     CRITICAL_BATTERY_RATIO = 0.25
     LOW_BATTERY_STEP_PENALTY = -0.002
@@ -534,21 +534,52 @@ class Preprocessor:
             return None
 
         hx, hz = self.cur_pos
-        use_switch = self._guard_no_progress_steps >= self.CHARGER_SWITCH_STUCK_STEPS
-        active_pts = self._select_charger_group_points(force_switch=use_switch)
-        if not active_pts:
-            active_pts = self.charger_cells
-        charger_pts = np.array(active_pts, dtype=np.float32)
+        # Always use all charger cells for distance and path finding
+        # 始终使用所有充电桩格子进行距离和路径计算
+        if not self.charger_cells:
+            return None
+        charger_pts = np.array(self.charger_cells, dtype=np.float32)
         base_dist = float(np.min(np.sqrt((charger_pts[:, 0] - hx) ** 2 + (charger_pts[:, 1] - hz) ** 2)))
+        # Find the nearest charger cell for debug
+        nearest_idx = int(np.argmin(np.sqrt((charger_pts[:, 0] - hx) ** 2 + (charger_pts[:, 1] - hz) ** 2)))
+        nearest_charger = (int(charger_pts[nearest_idx, 0]), int(charger_pts[nearest_idx, 1]))
         if base_dist <= 0.5:
             return None
 
         br = float(self.battery) / float(max(self.battery_max, 1))
+
+        # Build charger sets early for BFS distance calculation
+        # 提前构建充电桩集合用于BFS距离计算
+        charger_set = set((int(cx), int(cz)) for cx, cz in self.charger_cells)
+        full_charger_set = charger_set
+
+        # Calculate BFS distance to nearest charger for accurate path length
+        # 计算BFS距离以获得准确的路径长度
+        start = (hx, hz)
+
+        def simple_passable(x, z):
+            if not (0 <= x < self.GRID_SIZE and 0 <= z < self.GRID_SIZE):
+                return False
+            return bool(self.passable_map[x, z] >= 1)
+
+        bfs_to_charger = self._bfs_steps_to_charger(start, full_charger_set,
+            lambda x, z, dx, dz: simple_passable(x + dx, z + dz))
+        bfs_dist = bfs_to_charger if bfs_to_charger is not None else base_dist * 2  # Fallback: estimate 2x euclidean
+
+        # If BFS fails but we're close to charger, use euclidean distance
+        # 如果BFS失败但距离充电桩很近，使用欧几里得距离
+        if bfs_to_charger is None and base_dist <= 10:
+            bfs_dist = base_dist  # Use euclidean when close
+
         # Only trigger guard when battery is truly critical
-        # 仅在电量真正危急时触发guard
+        # Use BFS distance for more accurate "steps needed" estimate
+        # Add extra margin based on stuck steps to prevent getting trapped
+        # 仅在电量真正危急时触发guard，使用BFS距离获得更准确的"所需步数"估计
+        stuck_margin = min(self._guard_no_progress_steps * 5, 50)  # Extra margin when stuck
         must_charge = (
             self.battery <= self.HARD_GUARD_BATTERY_ABS
             or br < self.HARD_GUARD_BATTERY_RATIO
+            or self.battery <= bfs_dist + self.CHARGE_SAFETY_MARGIN + stuck_margin  # Battery must cover BFS path + stuck margin
         )
         if not must_charge:
             self._guard_no_progress_steps = 0
@@ -603,15 +634,11 @@ class Preprocessor:
 
         opposite = {0: 4, 4: 0, 2: 6, 6: 2, 1: 5, 5: 1, 3: 7, 7: 3}
 
-        # Build local BFS target set: all visible/known charger cells.
-        # 构建 BFS 目标集合：已知充电桩格子。
-        charger_set = set((int(cx), int(cz)) for cx, cz in active_pts)
-        if not charger_set:
-            charger_set = set((int(cx), int(cz)) for cx, cz in self.charger_cells)
-        start = (hx, hz)
+        def bfs_next_actions(ignore_npc=True):
+            """Return set of first-step actions on shortest paths to charger.
 
-        def bfs_next_actions():
-            """Return set of first-step actions on shortest paths to charger."""
+            ignore_npc: When True, ignore NPC danger for path finding (used in guard mode).
+            """
             if start in charger_set:
                 return set()
             q = deque([start])
@@ -633,8 +660,17 @@ class Preprocessor:
                     nx, nz = x + dx, z + dz
                     if (nx, nz) in visited:
                         continue
-                    if not valid_move(x, z, dx, dz):
-                        continue
+                    # Use relaxed move check in guard mode
+                    if ignore_npc:
+                        if not passable(nx, nz):
+                            continue
+                        if dx != 0 and dz != 0:
+                            # Diagonal anti-corner rule
+                            if not (passable(x + dx, z) or passable(x, z + dz)):
+                                continue
+                    else:
+                        if not valid_move(x, z, dx, dz):
+                            continue
                     visited.add((nx, nz))
                     parent[(nx, nz)] = ((x, z), a)
                     depth[(nx, nz)] = d0 + 1
@@ -655,7 +691,7 @@ class Preprocessor:
                     next_actions.add(first_a)
             return next_actions
 
-        bfs_actions = bfs_next_actions()
+        bfs_actions = bfs_next_actions(ignore_npc=True)
         # If current selected charger group has no reachable path hint, fallback to all known chargers.
         # 若当前充电桩分组暂无可达路径提示，退回全局已知充电桩集合，避免选错分组长时间空转。
         if not bfs_actions and len(charger_set) < len(self.charger_cells):
@@ -682,36 +718,59 @@ class Preprocessor:
             self.guard_terminal_override_count += 1
             term_best_action = None
             term_best_d = float("inf")
-            # First try with no NPC danger check at all
+            # First try with no NPC danger check at all - use full_charger_set for entry check
             charger_entry_blocked = []
             for a, (dx, dz) in enumerate(dirs):
-                if a >= len(legal_action) or int(legal_action[a]) != 1:
-                    charger_entry_blocked.append((a, "legal"))
-                    continue
                 nx, nz = hx + dx, hz + dz
-                if not passable(nx, nz):
-                    charger_entry_blocked.append((a, "passable"))
-                    continue
-                if (nx, nz) in charger_set:
+                # Check if this move enters ANY charger cell (use full_charger_set)
+                if (nx, nz) in full_charger_set:
+                    # Emergency: if very close and battery critical, try even if not legal
+                    if a >= len(legal_action) or int(legal_action[a]) != 1:
+                        if base_dist <= 3.0 and self.battery <= 50:
+                            charger_entry_blocked.append((a, "emergency_override"))
+                            self.charge_guard_triggered = 1
+                            self.charge_guard_trigger_count += 1
+                            return int(a)
+                        charger_entry_blocked.append((a, "legal"))
+                        continue
+                    if not passable(nx, nz):
+                        charger_entry_blocked.append((a, "passable"))
+                        continue
                     self.charge_guard_triggered = 1
                     self.charge_guard_trigger_count += 1
                     return int(a)
+                if a >= len(legal_action) or int(legal_action[a]) != 1:
+                    charger_entry_blocked.append((a, "legal"))
+                    continue
+                if not passable(nx, nz):
+                    charger_entry_blocked.append((a, "passable"))
+                    continue
                 charger_entry_blocked.append((a, f"not_charger_set,dist={np.min(np.sqrt((charger_pts[:, 0] - nx) ** 2 + (charger_pts[:, 1] - nz) ** 2)):.1f}"))
             # Log why we can't enter charger (log first 3 times and every 50th time)
             if self.guard_terminal_override_count <= 3 or self.guard_terminal_override_count % 50 == 0:
                 # Check if charger cells are passable
-                charger_passable = [(cx, cz, self.passable_map[cx, cz] if 0 <= cx < 128 and 0 <= cz < 128 else -1) for cx, cz in list(charger_set)[:3]]
+                charger_passable = [(cx, cz, self.passable_map[cx, cz] if 0 <= cx < 128 and 0 <= cz < 128 else -1) for cx, cz in list(full_charger_set)[:3]]
                 # Check BFS reachability
                 bfs_reachable = len(bfs_actions) > 0
-                print(f"[GUARD_DEBUG] ep={getattr(self, 'step_no', 0)} pos=({hx},{hz}) base_dist={base_dist:.1f} charger_set={list(charger_set)[:3]} charger_passable={charger_passable} bfs_reachable={bfs_reachable} relax_radius={relax_radius} blocked={charger_entry_blocked}")
-            # Then try moves that get closer to charger
+                # Check legal actions for charger-adjacent moves
+                legal_info = [(a, int(legal_action[a]) if a < len(legal_action) else -1) for a in range(8)]
+                # Check what cells are around us
+                nearby_info = []
+                for a, (dx, dz) in enumerate(dirs):
+                    nx, nz = hx + dx, hz + dz
+                    if 0 <= nx < 128 and 0 <= nz < 128:
+                        nearby_info.append((a, nx, nz, self.passable_map[nx, nz], (nx, nz) in full_charger_set))
+                # Check distance to each charger
+                charger_dists = [(cx, cz, np.sqrt((cx-hx)**2 + (cz-hz)**2)) for cx, cz in list(full_charger_set)[:3]]
+                print(f"[GUARD_DEBUG] ep={getattr(self, 'step_no', 0)} pos=({hx},{hz}) base_dist={base_dist:.1f} nearest_charger={nearest_charger} battery={self.battery} full_charger_set={list(full_charger_set)[:3]} charger_dists={charger_dists} charger_passable={charger_passable} bfs_reachable={bfs_reachable} relax_radius={relax_radius} blocked={charger_entry_blocked} legal={legal_info} nearby={nearby_info}")
+            # Then try moves that get closer to charger - ignore valid_move when very close
             for a, (dx, dz) in enumerate(dirs):
                 if a >= len(legal_action) or int(legal_action[a]) != 1:
                     continue
-                if not valid_move(hx, hz, dx, dz, danger_radius=0):
-                    continue
                 nx, nz = hx + dx, hz + dz
-                if (nx, nz) in charger_set:
+                if not passable(nx, nz):
+                    continue  # Only check passable, ignore NPC danger when terminal
+                if (nx, nz) in full_charger_set:
                     self.charge_guard_triggered = 1
                     self.charge_guard_trigger_count += 1
                     return int(a)
@@ -724,6 +783,88 @@ class Preprocessor:
                 self.charge_guard_trigger_count += 1
                 return int(term_best_action)
 
+            # CRITICAL FIX: If we're very close (base_dist <= 3) but still can't find a move,
+            # try BFS actions even if they seem suboptimal
+            if base_dist <= 3.0 and bfs_actions:
+                for a in bfs_actions:
+                    if a < len(legal_action) and int(legal_action[a]) == 1:
+                        dx, dz = dirs[a]
+                        nx, nz = hx + dx, hz + dz
+                        if passable(nx, nz):
+                            self.charge_guard_triggered = 1
+                            self.charge_guard_trigger_count += 1
+                            return int(a)
+
+            # LAST RESORT: If still no action, try any legal move that reduces distance
+            # even if passable check fails (might be a charger cell marked as obstacle)
+            if base_dist <= 3.0:
+                for a, (dx, dz) in enumerate(dirs):
+                    if a >= len(legal_action) or int(legal_action[a]) != 1:
+                        continue
+                    nx, nz = hx + dx, hz + dz
+                    if (nx, nz) in full_charger_set:
+                        self.charge_guard_triggered = 1
+                        self.charge_guard_trigger_count += 1
+                        return int(a)
+                    # Check if this move gets closer to any charger cell
+                    for cx, cz in full_charger_set:
+                        if abs(nx - cx) + abs(nz - cz) < abs(hx - cx) + abs(hz - cz):
+                            self.charge_guard_triggered = 1
+                            self.charge_guard_trigger_count += 1
+                            return int(a)
+
+            # SUPER LAST RESORT: If still no action and battery critical, just try any legal move
+            if self.battery <= 50:
+                for a, (dx, dz) in enumerate(dirs):
+                    if a < len(legal_action) and int(legal_action[a]) == 1:
+                        nx, nz = hx + dx, hz + dz
+                        if 0 <= nx < self.GRID_SIZE and 0 <= nz < self.GRID_SIZE:
+                            self.charge_guard_triggered = 1
+                            self.charge_guard_trigger_count += 1
+                            return int(a)
+
+            # ULTRA LAST RESORT: If we're in terminal range but stuck, try ANY legal move
+            # even if it doesn't get closer (might help escape a dead end)
+            if self._guard_no_progress_steps >= 2:
+                for a, (dx, dz) in enumerate(dirs):
+                    if a < len(legal_action) and int(legal_action[a]) == 1:
+                        nx, nz = hx + dx, hz + dz
+                        if 0 <= nx < self.GRID_SIZE and 0 <= nz < self.GRID_SIZE:
+                            if self.passable_map[nx, nz] >= 1:
+                                self.charge_guard_triggered = 1
+                                self.charge_guard_trigger_count += 1
+                                return int(a)
+
+            # HYPER LAST RESORT: If we're very close (dist <= 2) and still stuck,
+            # try to move toward the nearest charger cell even if it seems blocked
+            if base_dist <= 2.0:
+                # Find the nearest charger cell
+                nearest_charger_cell = None
+                min_charger_dist = float("inf")
+                for cx, cz in full_charger_set:
+                    d = abs(cx - hx) + abs(cz - hz)  # Manhattan distance
+                    if d < min_charger_dist:
+                        min_charger_dist = d
+                        nearest_charger_cell = (cx, cz)
+
+                if nearest_charger_cell:
+                    # Try to move toward the charger cell
+                    cx, cz = nearest_charger_cell
+                    best_a = None
+                    best_manhattan = abs(cx - hx) + abs(cz - hz)
+                    for a, (dx, dz) in enumerate(dirs):
+                        nx, nz = hx + dx, hz + dz
+                        new_manhattan = abs(cx - nx) + abs(cz - nz)
+                        if new_manhattan < best_manhattan:
+                            # Check if move is legal (ignore passable check)
+                            if a < len(legal_action) and int(legal_action[a]) == 1:
+                                best_a = a
+                                best_manhattan = new_manhattan
+                    if best_a is not None:
+                        self.charge_guard_triggered = 1
+                        self.charge_guard_trigger_count += 1
+                        return int(best_a)
+
         # Near-charger stronger takeover:
         # when entering near range, prefer shortest-path / direct approach actions
         # and suppress detours caused by local scoring noise.
@@ -732,14 +873,14 @@ class Preprocessor:
             near_danger_radius = max(0, relax_radius - 1)
             near_best_action = None
             near_best_score = float("inf")
-            # First try direct charger entry with no NPC check
+            # First try direct charger entry with no NPC check - use full_charger_set
             for a, (dx, dz) in enumerate(dirs):
                 if a >= len(legal_action) or int(legal_action[a]) != 1:
                     continue
                 nx, nz = hx + dx, hz + dz
                 if not passable(nx, nz):
                     continue
-                if (nx, nz) in charger_set:
+                if (nx, nz) in full_charger_set:
                     self.charge_guard_triggered = 1
                     self.charge_guard_trigger_count += 1
                     return int(a)
@@ -749,7 +890,7 @@ class Preprocessor:
                 if not valid_move(hx, hz, dx, dz, danger_radius=near_danger_radius):
                     continue
                 nx, nz = hx + dx, hz + dz
-                if (nx, nz) in charger_set:
+                if (nx, nz) in full_charger_set:
                     self.charge_guard_triggered = 1
                     self.charge_guard_trigger_count += 1
                     return int(a)
@@ -758,9 +899,11 @@ class Preprocessor:
                     charger_set,
                     lambda x, z, ddx, ddz: valid_move(x, z, ddx, ddz, danger_radius=near_danger_radius),
                 )
-                if bfs_steps is None:
-                    continue
+                # Use euclidean distance as fallback when BFS fails
+                # 当BFS失败时使用欧几里得距离作为回退
                 d_term = float(np.min(np.sqrt((charger_pts[:, 0] - nx) ** 2 + (charger_pts[:, 1] - nz) ** 2)))
+                if bfs_steps is None:
+                    bfs_steps = d_term + 5.0  # Small penalty for using euclidean
                 reverse_penalty = 0.20 if opposite.get(last_action, -1) == a else 0.0
                 near_score = float(bfs_steps) + 0.20 * d_term + reverse_penalty
                 if near_score < near_best_score:
@@ -790,7 +933,9 @@ class Preprocessor:
             euclid_d = float(np.min(np.sqrt((charger_pts[:, 0] - nx) ** 2 + (charger_pts[:, 1] - nz) ** 2)))
             bfs_steps = self._bfs_steps_to_charger((nx, nz), charger_set, valid_move)
             if bfs_steps is None:
-                d = euclid_d + 1000.0
+                # Use euclidean distance as fallback, with small penalty
+                # 使用欧几里得距离作为回退，加小惩罚
+                d = euclid_d + 10.0
             else:
                 d = float(bfs_steps)
             npc_cost = self._npc_safety_cost(nx, nz)
@@ -818,21 +963,21 @@ class Preprocessor:
                     best_safe_score = score
                     best_safe_action = a
 
-        # Priority 1: choose safest action that keeps “battery >= charger distance” invariant.
-        # 优先级1：选择满足”电量>=最近充电桩距离”不变式的动作。
+        # Priority 1: choose safest action that keeps "battery >= charger distance" invariant.
+        # 优先级1：选择满足"电量>=最近充电桩距离"不变式的动作。
         if best_safe_action is not None:
             self.charge_guard_triggered = 1
             self.charge_guard_trigger_count += 1
             return int(best_safe_action)
         # If strict safe action doesn't exist, allow near-feasible action as emergency fallback.
-        # 当无严格可达动作时，仅在”接近可达”情况下放宽一步，避免完全失控。
+        # 当无严格可达动作时，仅在"接近可达"情况下放宽一步，避免完全失控。
         if best_margin_action is not None and best_margin >= -0.5:
             self.charge_guard_triggered = 1
             self.charge_guard_trigger_count += 1
             return int(best_margin_action)
         # If stuck for several steps, allow escape action that trades a bit of distance
         # for much safer / less repeated cells, to bypass local minima near walls.
-        # 若连续多步无进展，则允许”绕障逃逸”动作，避免在墙角原地消耗电量。
+        # 若连续多步无进展，则允许"绕障逃逸"动作，避免在墙角原地消耗电量。
         if self._guard_no_progress_steps >= self.GUARD_STUCK_STEPS and best_action is not None:
             self.charge_guard_triggered = 1
             self.charge_guard_trigger_count += 1
@@ -843,6 +988,28 @@ class Preprocessor:
             self.charge_guard_triggered = 1
             self.charge_guard_trigger_count += 1
             return int(best_action)
+
+        # EMERGENCY FALLBACK: If no action found at all, ignore all checks and just move toward charger
+        # 紧急回退：如果完全找不到动作，忽略所有检查直接向充电桩移动
+        if self.battery <= 100 or br <= 0.20:
+            emergency_best = None
+            emergency_best_d = float("inf")
+            for a, (dx, dz) in enumerate(dirs):
+                nx, nz = hx + dx, hz + dz
+                if not (0 <= nx < self.GRID_SIZE and 0 <= nz < self.GRID_SIZE):
+                    continue
+                # Just check if it's not a wall
+                if self.passable_map[nx, nz] < 1:
+                    continue
+                d = float(np.min(np.sqrt((charger_pts[:, 0] - nx) ** 2 + (charger_pts[:, 1] - nz) ** 2)))
+                if d < emergency_best_d:
+                    emergency_best_d = d
+                    emergency_best = a
+            if emergency_best is not None:
+                self.charge_guard_triggered = 1
+                self.charge_guard_trigger_count += 1
+                return int(emergency_best)
+
         return None
 
     def get_cardinal_clean_action(self, legal_action, probs, last_action):
